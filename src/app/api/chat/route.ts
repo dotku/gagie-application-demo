@@ -1,26 +1,103 @@
 import OpenAI from "openai";
 import { NextResponse } from "next/server";
+import { encode } from "gpt-tokenizer";
 
-// Rough estimate of tokens per character (this is an approximation)
-const TOKENS_PER_CHAR = 0.25;
-// Reserve tokens for system prompt (1000), user query (500), and response (1000)
-const MAX_CONTEXT_TOKENS = 5500;
+const ragieApiKey = process.env.RAGIE_API_KEY;
+const openAiApiKey = process.env.OPENAI_API_KEY;
 
-function estimateTokens(text: string): number {
-  return Math.ceil(text.length * TOKENS_PER_CHAR);
+if (!ragieApiKey || !openAiApiKey) {
+  throw new Error("Missing required API keys");
 }
 
-function truncateText(chunks: string[], maxTokens: number): string[] {
+const openai = new OpenAI({ apiKey: openAiApiKey });
+
+// Constants for token management
+const MAX_TOKENS = 4096; // GPT-4's maximum context length
+const MAX_RESPONSE_TOKENS = 1000; // Reserve tokens for the response
+const SYSTEM_PROMPT_TOKENS = 500; // Approximate tokens for system prompt
+const MAX_CONTEXT_TOKENS = MAX_TOKENS - MAX_RESPONSE_TOKENS - SYSTEM_PROMPT_TOKENS;
+const MAX_TOKENS_PER_MESSAGE = 1000; // Maximum tokens for a single message
+
+interface Message {
+  role: string;
+  content: string;
+  timestamp?: string;
+}
+
+// Function to ensure a single message doesn't exceed token limit
+function truncateMessage(message: Message): Message {
+  const tokens = encode(message.content);
+  if (tokens.length <= MAX_TOKENS_PER_MESSAGE) {
+    return message;
+  }
+
+  // Decode only the tokens we want to keep
+  const truncatedContent = tokens
+    .slice(0, MAX_TOKENS_PER_MESSAGE - 50) // Leave room for ellipsis
+    .map(token => String.fromCharCode(token))
+    .join("");
+
+  return {
+    ...message,
+    content: truncatedContent + "... (message truncated due to length)",
+  };
+}
+
+// Function to truncate conversation history to fit token limit
+function truncateConversationHistory(messages: Message[], maxTokens: number): Message[] {
+  // First, truncate any overly long messages
+  let truncatedMessages = messages.map(truncateMessage);
+  
+  const tokenCounts = truncatedMessages.map(msg => encode(msg.content).length);
+  let totalTokens = tokenCounts.reduce((sum, count) => sum + count, 0);
+  
+  // Start removing older messages until we're under the limit
+  while (totalTokens > maxTokens && truncatedMessages.length > 1) {
+    const removedMessage = truncatedMessages.shift(); // Remove the oldest message
+    if (removedMessage) {
+      totalTokens -= encode(removedMessage.content).length;
+    }
+  }
+
+  // If we still exceed the limit with just one message, truncate it further
+  if (truncatedMessages.length === 1 && totalTokens > maxTokens) {
+    const singleMessage = truncatedMessages[0];
+    const tokens = encode(singleMessage.content);
+    const truncatedContent = tokens
+      .slice(0, maxTokens - 50)
+      .map(token => String.fromCharCode(token))
+      .join("");
+
+    truncatedMessages = [{
+      ...singleMessage,
+      content: truncatedContent + "... (message truncated due to length)",
+    }];
+  }
+  
+  return truncatedMessages;
+}
+
+// Function to truncate context to fit token limit
+function truncateContext(chunks: string[], maxTokens: number): string[] {
   let totalTokens = 0;
   const truncatedChunks: string[] = [];
 
   for (const chunk of chunks) {
-    const chunkTokens = estimateTokens(chunk);
-    if (totalTokens + chunkTokens > maxTokens) {
+    const tokenCount = encode(chunk).length;
+    if (totalTokens + tokenCount > maxTokens) {
+      // If this is the first chunk and it's too long, truncate it
+      if (truncatedChunks.length === 0) {
+        const tokens = encode(chunk);
+        const truncatedContent = tokens
+          .slice(0, maxTokens - 50)
+          .map(token => String.fromCharCode(token))
+          .join("");
+        truncatedChunks.push(truncatedContent + "... (truncated)");
+      }
       break;
     }
     truncatedChunks.push(chunk);
-    totalTokens += chunkTokens;
+    totalTokens += tokenCount;
   }
 
   return truncatedChunks;
@@ -28,90 +105,56 @@ function truncateText(chunks: string[], maxTokens: number): string[] {
 
 export async function POST(req: Request) {
   try {
-    const { query } = await req.json();
-
-    // Validate query
-    if (!query || typeof query !== "string") {
+    const { messages } = await req.json();
+    
+    if (!Array.isArray(messages) || messages.length === 0) {
       return NextResponse.json(
-        { error: "Query is required and must be a string" },
+        { error: "Invalid messages format" },
         { status: 400 }
       );
     }
 
-    // Get API keys
-    const ragieApiKey = process.env.RAGIE_API_KEY;
-    const openAiApiKey = process.env.OPENAI_API_KEY;
-
-    if (!ragieApiKey || !openAiApiKey) {
-      console.error("Missing required environment variables");
+    const lastMessage = messages[messages.length - 1];
+    if (!lastMessage?.content) {
       return NextResponse.json(
-        { error: "Server configuration error" },
-        { status: 500 }
+        { error: "Invalid message content" },
+        { status: 400 }
       );
     }
 
-    let response;
-    try {
-      response = await fetch("https://api.ragie.ai/retrievals", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-          Authorization: "Bearer " + ragieApiKey,
-        },
-        body: JSON.stringify({ query, filters: { scope: "tutorial" } }),
-      });
-    } catch (error: unknown) {
-      if (error instanceof Error) {
-        console.error("Ragie API network error:", error.message);
-        return NextResponse.json({ error: error.message }, { status: 503 });
-      } else {
-        console.error("Ragie API network error:", error);
-        return NextResponse.json(
-          { error: "Failed to connect to Ragie API" },
-          { status: 503 }
-        );
-      }
-    }
+    const query = lastMessage.content;
 
-    if (!response.ok) {
-      console.error(
-        `Ragie API error: ${response.status} ${response.statusText}`
-      );
-      return NextResponse.json(
-        { error: "Failed to retrieve data from Ragie API" },
-        { status: response.status }
+    // Get context from Ragie AI
+    const ragieResponse = await fetch("https://api.ragie.ai/retrievals", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + ragieApiKey,
+      },
+      body: JSON.stringify({ query, filters: { scope: "tutorial" } }),
+    });
+
+    if (!ragieResponse.ok) {
+      throw new Error(
+        `Failed to retrieve data from Ragie API: ${ragieResponse.status} ${ragieResponse.statusText}`
       );
     }
 
-    // Parse and validate Ragie response
-    const data = await response.json();
-    console.log("ragie rspond", data);
-    if (!data.scored_chunks || !Array.isArray(data.scored_chunks)) {
-      console.error("Invalid response from Ragie API:", data);
-      return NextResponse.json(
-        { error: "Invalid response from Ragie API" },
-        { status: 502 }
-      );
+    const ragieData = await ragieResponse.json();
+    
+    if (!Array.isArray(ragieData.scored_chunks)) {
+      throw new Error("Invalid response format from Ragie API");
     }
 
-    let chunkText = data.scored_chunks
-      .map((chunk: any) => (typeof chunk.text === "string" ? chunk.text : ""))
-      .filter(Boolean);
+    let chunkText = ragieData.scored_chunks.map((chunk: any) => chunk.text);
 
-    // Handle no results case
-    if (chunkText.length === 0) {
-      return NextResponse.json({
-        content:
-          "I couldn't find any relevant information for your query. Could you try rephrasing your question or using different keywords?",
-      });
+    // Sort chunks by relevance score if available
+    if (ragieData.scored_chunks[0]?.score) {
+      chunkText.sort((a: any, b: any) => b.score - a.score);
     }
 
-    // Sort chunks by length (longest first)
-    chunkText.sort((a, b) => b.length - a.length);
-
-    // Truncate chunks to fit within token limit
-    chunkText = truncateText(chunkText, MAX_CONTEXT_TOKENS);
+    // Truncate context to fit within token limits
+    chunkText = truncateContext(chunkText, MAX_CONTEXT_TOKENS / 2); // Use half for context
 
     const systemPrompt = `These are very important to follow:
 
@@ -127,7 +170,7 @@ Don't use XML or other markup unless requested by the user.
 
 Here is all of the information available to answer the user:
 ===
-${chunkText}
+${chunkText.join("\n")}
 ===
 
 If the user asked for a search and there are no results, make sure to let the user know that you couldn't find anything,
@@ -135,52 +178,36 @@ and what they might be able to do to find the information they need.
 
 END SYSTEM INSTRUCTIONS`;
 
-    let chatCompletion;
-    try {
-      const openai = new OpenAI({ apiKey: openAiApiKey });
-      chatCompletion = await openai.chat.completions.create({
-        model: "gpt-3.5-turbo",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: query },
-        ],
-        max_tokens: 1000, // Limit response length
-      });
-    } catch (error: unknown) {
-      if (error instanceof Error) {
-        console.error("OpenAI API error:", error.message);
-        return NextResponse.json({ error: error.message }, { status: 502 });
-      } else {
-        console.error("OpenAI API error:", error);
-        return NextResponse.json(
-          { error: "Failed to generate response" },
-          { status: 502 }
-        );
-      }
-    }
+    // Truncate conversation history to fit remaining token limit
+    const conversationHistory = truncateConversationHistory(
+      messages.slice(0, -1),
+      MAX_CONTEXT_TOKENS / 2 // Use remaining half for conversation history
+    );
 
-    // Validate OpenAI response
-    if (!chatCompletion?.choices?.[0]?.message?.content) {
-      console.error("Invalid response from OpenAI:", chatCompletion);
-      return NextResponse.json(
-        { error: "Invalid response from OpenAI" },
-        { status: 502 }
-      );
+    // Get response from OpenAI
+    const chatCompletion = await openai.chat.completions.create({
+      messages: [
+        { role: "system", content: systemPrompt },
+        ...conversationHistory,
+        { role: "user", content: query },
+      ],
+      model: "gpt-4",
+      max_tokens: MAX_RESPONSE_TOKENS,
+    });
+
+    if (!chatCompletion.choices?.[0]?.message?.content) {
+      throw new Error("Invalid response from OpenAI");
     }
 
     return NextResponse.json({
-      content: chatCompletion.choices[0].message.content,
+      message: chatCompletion.choices[0].message.content,
     });
-  } catch (error: unknown) {
-    if (error instanceof Error) {
-      console.error("Unhandled error:", error.message);
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    } else {
-      console.error("Unhandled error:", error);
-      return NextResponse.json(
-        { error: "Internal Server Error" },
-        { status: 500 }
-      );
-    }
+  } catch (error) {
+    console.error("Chat error:", error);
+    const errorMessage = error instanceof Error ? error.message : "An unknown error occurred";
+    return NextResponse.json(
+      { error: errorMessage },
+      { status: error instanceof Error && error.message.includes("Invalid") ? 400 : 500 }
+    );
   }
 }
