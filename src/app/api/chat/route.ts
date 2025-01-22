@@ -38,7 +38,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // Check for required environment variables
+    // Get API keys
     const ragieApiKey = process.env.RAGIE_API_KEY;
     const openAiApiKey = process.env.OPENAI_API_KEY;
 
@@ -50,23 +50,28 @@ export async function POST(req: Request) {
       );
     }
 
-    // Call Ragie API with error handling
     let response;
     try {
       response = await fetch("https://api.ragie.ai/retrievals", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Accept: "application/json",
           Authorization: "Bearer " + ragieApiKey,
         },
         body: JSON.stringify({ query, filters: { scope: "tutorial" } }),
       });
-    } catch (error) {
-      console.error("Ragie API network error:", error);
-      return NextResponse.json(
-        { error: "Failed to connect to Ragie API" },
-        { status: 503 }
-      );
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        console.error("Ragie API network error:", error.message);
+        return NextResponse.json({ error: error.message }, { status: 503 });
+      } else {
+        console.error("Ragie API network error:", error);
+        return NextResponse.json(
+          { error: "Failed to connect to Ragie API" },
+          { status: 503 }
+        );
+      }
     }
 
     if (!response.ok) {
@@ -102,7 +107,7 @@ export async function POST(req: Request) {
       });
     }
 
-    // Sort chunks by relevance (assuming they're already scored)
+    // Sort chunks by length (longest first)
     chunkText.sort((a, b) => b.length - a.length);
 
     // Truncate chunks to fit within token limit
@@ -110,44 +115,48 @@ export async function POST(req: Request) {
 
     const systemPrompt = `These are very important to follow:
 
-    You are "Ragie AI", a professional but friendly AI chatbot working as an assistant to the user.
+You are "Ragie AI", a professional but friendly AI chatbot working as an assitant to the user.
 
-    Your current task is to help the user based on all of the information available to you shown below.
-    Answer informally, directly, and concisely without a heading or greeting but include everything relevant.
-    Use richtext Markdown when appropriate including bold, italic, paragraphs, and lists when helpful.
-    If using LaTeX, use double $$ as delimiter instead of single $. Use $$...$$ instead of parentheses.
-    Organize information into multiple sections or points when appropriate.
-    Don't include raw item IDs or other raw fields from the source.
-    Don't use XML or other markup unless requested by the user.
+Your current task is to help the user based on all of the information available to you shown below.
+Answer informally, directly, and concisely without a heading or greeting but include everything relevant.
+Use richtext Markdown when appropriate including bold, italic, paragraphs, and lists when helpful.
+If using LaTeX, use double $$ as delimiter instead of single $. Use $$...$$ instead of parentheses.
+Organize information into multiple sections or points when appropriate.
+Don't include raw item IDs or other raw fields from the source.
+Don't use XML or other markup unless requested by the user.
 
-    Here is all of the information available to answer the user:
-    ===
-    ${chunkText.join("\n")}
-    ===
+Here is all of the information available to answer the user:
+===
+${chunkText}
+===
 
-    If the user asked for a search and there are no results, make sure to let the user know that you couldn't find anything,
-    and what they might be able to do to find the information they need.
+If the user asked for a search and there are no results, make sure to let the user know that you couldn't find anything,
+and what they might be able to do to find the information they need.
 
-    END SYSTEM INSTRUCTIONS`;
+END SYSTEM INSTRUCTIONS`;
 
-    // Call OpenAI with error handling
     let chatCompletion;
     try {
       const openai = new OpenAI({ apiKey: openAiApiKey });
       chatCompletion = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: query },
         ],
-        model: "gpt-4",
         max_tokens: 1000, // Limit response length
       });
-    } catch (error: any) {
-      console.error("OpenAI API error:", error);
-      return NextResponse.json(
-        { error: error.message || "Failed to generate response" },
-        { status: 502 }
-      );
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        console.error("OpenAI API error:", error.message);
+        return NextResponse.json({ error: error.message }, { status: 502 });
+      } else {
+        console.error("OpenAI API error:", error);
+        return NextResponse.json(
+          { error: "Failed to generate response" },
+          { status: 502 }
+        );
+      }
     }
 
     // Validate OpenAI response
@@ -162,11 +171,16 @@ export async function POST(req: Request) {
     return NextResponse.json({
       content: chatCompletion.choices[0].message.content,
     });
-  } catch (error: any) {
-    console.error("Unhandled error:", error);
-    return NextResponse.json(
-      { error: error.message || "Internal Server Error" },
-      { status: 500 }
-    );
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      console.error("Unhandled error:", error.message);
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    } else {
+      console.error("Unhandled error:", error);
+      return NextResponse.json(
+        { error: "Internal Server Error" },
+        { status: 500 }
+      );
+    }
   }
 }
