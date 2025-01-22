@@ -1,7 +1,0 @@
-{
-  "buildCommand": "next build",
-  "ignoreCommand": "echo 'Skipping ESLint check'",
-  "installCommand": "npm install",
-  "framework": "nextjs",
-  "devCommand": "next dev"
-}
