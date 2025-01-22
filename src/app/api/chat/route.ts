@@ -1,23 +1,28 @@
-import OpenAI from 'openai';
-import { NextResponse } from 'next/server';
+import OpenAI from "openai";
+import { NextResponse } from "next/server";
 
 // Rough estimate of tokens per character (this is an approximation)
 const TOKENS_PER_CHAR = 0.25;
-const MAX_TOKENS = 7000; // Leave some room for the system prompt and user query
+// Reserve tokens for system prompt (1000), user query (500), and response (1000)
+const MAX_CONTEXT_TOKENS = 5500;
 
-function truncateText(text: string[], maxTokens: number): string[] {
-  let totalChars = 0;
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length * TOKENS_PER_CHAR);
+}
+
+function truncateText(chunks: string[], maxTokens: number): string[] {
+  let totalTokens = 0;
   const truncatedChunks: string[] = [];
-  
-  for (const chunk of text) {
-    const estimatedTokens = totalChars * TOKENS_PER_CHAR;
-    if (estimatedTokens >= maxTokens) {
+
+  for (const chunk of chunks) {
+    const chunkTokens = estimateTokens(chunk);
+    if (totalTokens + chunkTokens > maxTokens) {
       break;
     }
     truncatedChunks.push(chunk);
-    totalChars += chunk.length;
+    totalTokens += chunkTokens;
   }
-  
+
   return truncatedChunks;
 }
 
@@ -25,28 +30,84 @@ export async function POST(req: Request) {
   try {
     const { query } = await req.json();
 
+    // Validate query
+    if (!query || typeof query !== "string") {
+      return NextResponse.json(
+        { error: "Query is required and must be a string" },
+        { status: 400 }
+      );
+    }
+
+    // Check for required environment variables
     const ragieApiKey = process.env.RAGIE_API_KEY;
     const openAiApiKey = process.env.OPENAI_API_KEY;
 
-    const response = await fetch("https://api.ragie.ai/retrievals", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: "Bearer " + ragieApiKey,
-      },
-      body: JSON.stringify({ query, filters: { scope: "tutorial" }}),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to retrieve data from Ragie API: ${response.status} ${response.statusText}`);
+    if (!ragieApiKey || !openAiApiKey) {
+      console.error("Missing required environment variables");
+      return NextResponse.json(
+        { error: "Server configuration error" },
+        { status: 500 }
+      );
     }
 
+    // Call Ragie API with error handling
+    let response;
+    try {
+      response = await fetch("https://api.ragie.ai/retrievals", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer " + ragieApiKey,
+        },
+        body: JSON.stringify({ query, filters: { scope: "tutorial" } }),
+      });
+    } catch (error) {
+      console.error("Ragie API network error:", error);
+      return NextResponse.json(
+        { error: "Failed to connect to Ragie API" },
+        { status: 503 }
+      );
+    }
+
+    if (!response.ok) {
+      console.error(
+        `Ragie API error: ${response.status} ${response.statusText}`
+      );
+      return NextResponse.json(
+        { error: "Failed to retrieve data from Ragie API" },
+        { status: response.status }
+      );
+    }
+
+    // Parse and validate Ragie response
     const data = await response.json();
-    let chunkText = data.scored_chunks.map((chunk: any) => chunk.text);
-    
+    console.log("ragie rspond", data);
+    if (!data.scored_chunks || !Array.isArray(data.scored_chunks)) {
+      console.error("Invalid response from Ragie API:", data);
+      return NextResponse.json(
+        { error: "Invalid response from Ragie API" },
+        { status: 502 }
+      );
+    }
+
+    let chunkText = data.scored_chunks
+      .map((chunk: any) => (typeof chunk.text === "string" ? chunk.text : ""))
+      .filter(Boolean);
+
+    // Handle no results case
+    if (chunkText.length === 0) {
+      return NextResponse.json({
+        content:
+          "I couldn't find any relevant information for your query. Could you try rephrasing your question or using different keywords?",
+      });
+    }
+
+    // Sort chunks by relevance (assuming they're already scored)
+    chunkText.sort((a, b) => b.length - a.length);
+
     // Truncate chunks to fit within token limit
-    chunkText = truncateText(chunkText, MAX_TOKENS);
-    
+    chunkText = truncateText(chunkText, MAX_CONTEXT_TOKENS);
+
     const systemPrompt = `These are very important to follow:
 
     You are "Ragie AI", a professional but friendly AI chatbot working as an assistant to the user.
@@ -61,7 +122,7 @@ export async function POST(req: Request) {
 
     Here is all of the information available to answer the user:
     ===
-    ${chunkText.join('\n')}
+    ${chunkText.join("\n")}
     ===
 
     If the user asked for a search and there are no results, make sure to let the user know that you couldn't find anything,
@@ -69,19 +130,43 @@ export async function POST(req: Request) {
 
     END SYSTEM INSTRUCTIONS`;
 
-    const openai = new OpenAI({ apiKey: openAiApiKey });
-    const chatCompletion = await openai.chat.completions.create({
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: query },
-      ],
-      model: "gpt-4",
-      max_tokens: 1000, // Limit response length
-    });
+    // Call OpenAI with error handling
+    let chatCompletion;
+    try {
+      const openai = new OpenAI({ apiKey: openAiApiKey });
+      chatCompletion = await openai.chat.completions.create({
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: query },
+        ],
+        model: "gpt-4",
+        max_tokens: 1000, // Limit response length
+      });
+    } catch (error: any) {
+      console.error("OpenAI API error:", error);
+      return NextResponse.json(
+        { error: error.message || "Failed to generate response" },
+        { status: 502 }
+      );
+    }
 
-    return NextResponse.json({ content: chatCompletion.choices[0].message.content });
-  } catch (error) {
-    console.error('Error:', error);
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    // Validate OpenAI response
+    if (!chatCompletion?.choices?.[0]?.message?.content) {
+      console.error("Invalid response from OpenAI:", chatCompletion);
+      return NextResponse.json(
+        { error: "Invalid response from OpenAI" },
+        { status: 502 }
+      );
+    }
+
+    return NextResponse.json({
+      content: chatCompletion.choices[0].message.content,
+    });
+  } catch (error: any) {
+    console.error("Unhandled error:", error);
+    return NextResponse.json(
+      { error: error.message || "Internal Server Error" },
+      { status: 500 }
+    );
   }
 }

@@ -16,7 +16,7 @@ export async function GET(
     }
 
     const response = await fetch(
-      `https://api.ragie.ai/documents/${documentId}`,
+      `https://api.ragie.ai/documents/${documentId}/content`,
       {
         method: "GET",
         headers: {
