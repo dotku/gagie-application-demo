@@ -1,38 +1,24 @@
-"use client";
-
-import React, { useState, useEffect } from "react";
-import { DocumentList } from "./components/DocumentList";
-import { ChatHistory } from "./components/ChatHistory";
-import { ShareModal } from "./components/ShareModal";
+import React, { useState, useEffect } from 'react';
+import { DocumentList } from './components/DocumentList';
+import { ChatHistory } from './components/ChatHistory';
+import { ShareModal } from './components/ShareModal';
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/utils/supabase";
-import type { ChatHistory } from "@/utils/supabase";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import { shareOnX, formatDocumentForSharing } from "@/utils/share";
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 export default function Home() {
-  // State declarations
-  const { user, signIn, signUp, signOut, loading: authLoading } = useAuth();
+  const { user } = useAuth();
   const [query, setQuery] = useState("");
   const [response, setResponse] = useState("");
   const [loading, setLoading] = useState(false);
   const [documents, setDocuments] = useState([]);
   const [loadingDocs, setLoadingDocs] = useState(false);
   const [selectedDocument, setSelectedDocument] = useState(null);
-  const [history, setHistory] = useState<ChatHistory[]>([]);
-  const [showAuthForm, setShowAuthForm] = useState(false);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [authError, setAuthError] = useState("");
-  const [showRecoveryForm, setShowRecoveryForm] = useState(false);
-  const [recoveryEmail, setRecoveryEmail] = useState("");
-  const [recoverySuccess, setRecoverySuccess] = useState(false);
-  const [chatError, setChatError] = useState<string | null>(null);
-  const [sidebarTab, setSidebarTab] = useState<"documents" | "history">(
-    "documents"
-  );
-  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [history, setHistory] = useState([]);
+  const [chatError, setChatError] = useState(null);
+  const [sidebarTab, setSidebarTab] = useState('documents');
+  const [shareUrl, setShareUrl] = useState(null);
   const [showShareModal, setShowShareModal] = useState(false);
 
   useEffect(() => {
@@ -45,49 +31,20 @@ export default function Home() {
     }
   }, [user]);
 
-  // API interaction functions
   const loadDocuments = async () => {
     setLoadingDocs(true);
     try {
-      const response = await fetch("/api/documents");
+      const response = await fetch('/api/documents');
       if (!response.ok) {
-        throw new Error(`Failed to load documents: ${response.status}`);
+        throw new Error('Failed to load documents');
       }
       const data = await response.json();
-      // Ensure data is an array and handle sorting safely
-      const docs = Array.isArray(data) ? data : [];
-      const sortedDocs = [...docs] // Create a copy before sorting
-        .filter((doc) => doc && doc.created_at) // Filter out invalid entries
-        .sort((a, b) => {
-          const dateA = new Date(a.created_at).getTime();
-          const dateB = new Date(b.created_at).getTime();
-          return dateB - dateA; // Most recent first
-        })
-        .slice(0, 3);
-      setDocuments(sortedDocs);
+      setDocuments(data);
     } catch (error) {
-      console.error("Error loading documents:", error);
-      setDocuments([]);
+      console.error('Error loading documents:', error);
     } finally {
       setLoadingDocs(false);
     }
-  };
-
-  const loadChatHistory = async () => {
-    if (!user) return;
-
-    const { data, error } = await supabase
-      .from("chat_history")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      console.error("Error loading chat history:", error);
-      return;
-    }
-
-    setHistory(data);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -98,113 +55,111 @@ export default function Home() {
     setChatError(null);
 
     try {
-      const res = await fetch("/api/chat", {
-        method: "POST",
+      const response = await fetch('/api/chat', {
+        method: 'POST',
         headers: {
-          "Content-Type": "application/json",
+          'Content-Type': 'application/json',
         },
         body: JSON.stringify({ query }),
       });
 
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to get response");
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to get response');
       }
 
       setResponse(data.content);
-
-      // Save to Supabase only if user is logged in
+      
+      // Save to history if user is logged in
       if (user) {
-        const { error: supabaseError } = await supabase
-          .from("chat_history")
-          .insert({
-            user_id: user.id,
-            query,
-            response: data.content,
-            is_public: false,
-          });
+        const { error } = await supabase
+          .from('chat_history')
+          .insert([
+            {
+              user_id: user.id,
+              query,
+              response: data.content,
+              is_public: false,
+            },
+          ]);
 
-        if (supabaseError) {
-          console.error("Error saving chat:", supabaseError);
-          // Don't throw here, just log the error since the chat was successful
+        if (error) {
+          console.error('Error saving to history:', error);
         }
       }
-    } catch (error: any) {
-      console.error("Chat error:", error);
-      setChatError(error.message || "Failed to get response");
-      setResponse(""); // Clear any partial response
+    } catch (error) {
+      console.error('Chat error:', error);
+      setChatError(error instanceof Error ? error.message : 'An error occurred');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleAuth = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthError("");
-
-    const { error } = await signIn(email, password);
-
-    if (error) {
-      setAuthError(error.message);
-    } else {
-      setShowAuthForm(false);
-      setEmail("");
-      setPassword("");
-    }
-  };
-
-  const handleRecovery = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setAuthError(null);
+  const loadChatHistory = async () => {
+    if (!user) return;
 
     try {
-      const response = await fetch("/api/auth/recovery", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: recoveryEmail }),
-      });
+      const { data, error } = await supabase
+        .from('chat_history')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || "Failed to send recovery email");
-      }
-
-      setRecoverySuccess(true);
+      if (error) throw error;
+      setHistory(data || []);
     } catch (error) {
-      setAuthError(error.message);
-    } finally {
-      setLoading(false);
+      console.error('Error loading chat history:', error);
     }
   };
 
-  const togglePrivacy = async (chatId: string, currentStatus: boolean) => {
-    const { error } = await supabase
-      .from("chat_history")
-      .update({ is_public: !currentStatus })
-      .eq("id", chatId);
+  const togglePrivacy = async (chatId: string, currentIsPublic: boolean) => {
+    try {
+      const { error } = await supabase
+        .from('chat_history')
+        .update({ is_public: !currentIsPublic })
+        .eq('id', chatId);
 
-    if (error) {
-      console.error("Error updating privacy:", error);
-      return;
+      if (error) throw error;
+      loadChatHistory();
+    } catch (error) {
+      console.error('Error toggling privacy:', error);
     }
+  };
 
-    loadChatHistory();
+  const handleShare = async (chat: any, includeQuestion: boolean) => {
+    try {
+      const response = await fetch('/api/share', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: includeQuestion ? chat.query : null,
+          response: chat.response,
+        }),
+      });
+
+      if (!response.ok) throw new Error('Failed to create share link');
+      
+      const { shareId } = await response.json();
+      const url = `${window.location.origin}/share/${shareId}`;
+      setShareUrl(url);
+      setShowShareModal(true);
+    } catch (error) {
+      console.error('Share error:', error);
+      alert('Failed to create share link');
+    }
   };
 
   const handleXShare = (chat: any, includeQuestion: boolean) => {
-    let text;
-    if (includeQuestion) {
-      text = `Q: ${chat.query}\nA: ${chat.response}`;
-    } else {
-      text = chat.response;
-    }
-    
+    const text = includeQuestion
+      ? `Q: ${chat.query}\n\nA: ${chat.response}`
+      : chat.response;
+
     const truncatedText = text.length > 255
       ? text.substring(0, 250) + '...'
       : text;
-
+      
     const url = 'https://twitter.com/intent/tweet?text=' + encodeURIComponent(truncatedText);
     window.open(url, '_blank');
   };
@@ -216,7 +171,6 @@ export default function Home() {
 
     const sourceUrl = window.location.origin;
     
-    // Include both text content and source URL
     const url = `https://www.linkedin.com/feed/?linkOrigin=LI_BADGE&shareActive=true&text=${encodeURIComponent(text)}&url=${encodeURIComponent(sourceUrl)}`;
     window.open(url, '_blank');
   };
@@ -229,40 +183,15 @@ export default function Home() {
     try {
       const res = await fetch(`/api/documents/${doc.id}/content`);
       if (!res.ok) {
-        throw new Error(`Failed to load content: ${res.status}`);
+        throw new Error('Failed to load document content');
       }
       const data = await res.json();
       setResponse(data);
     } catch (error) {
-      console.error("Error loading document content:", error);
+      console.error('Error loading document content:', error);
       setResponse(null);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleShare = async (chat: any, includeQuestion: boolean) => {
-    try {
-      const response = await fetch("/api/share", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          query: includeQuestion ? chat.query : null,
-          response: chat.response,
-        }),
-      });
-
-      if (!response.ok) throw new Error("Failed to create share link");
-
-      const { shareId } = await response.json();
-      const url = `${window.location.origin}/share/${shareId}`;
-      setShareUrl(url);
-      setShowShareModal(true);
-    } catch (error) {
-      console.error("Share error:", error);
-      alert("Failed to create share link");
     }
   };
 
@@ -277,7 +206,7 @@ export default function Home() {
           <div className="flex items-center gap-4">
             {user ? (
               <button
-                onClick={() => signOut()}
+                onClick={() => supabase.auth.signOut()}
                 className="text-gray-400 hover:text-white transition-colors duration-200"
               >
                 Sign Out
