@@ -1,11 +1,13 @@
-import React, { useState, useEffect } from 'react';
-import { DocumentList } from './components/DocumentList';
-import { ChatHistory } from './components/ChatHistory';
-import { ShareModal } from './components/ShareModal';
+"use client";
+
+import React, { useState, useEffect } from "react";
+import { DocumentList } from "./components/DocumentList";
+import { ChatHistory } from "./components/ChatHistory";
+import { ShareModal } from "./components/ShareModal";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/utils/supabase";
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 export default function Home() {
   const { user } = useAuth();
@@ -17,7 +19,7 @@ export default function Home() {
   const [selectedDocument, setSelectedDocument] = useState(null);
   const [history, setHistory] = useState([]);
   const [chatError, setChatError] = useState(null);
-  const [sidebarTab, setSidebarTab] = useState('documents');
+  const [sidebarTab, setSidebarTab] = useState("documents");
   const [shareUrl, setShareUrl] = useState(null);
   const [showShareModal, setShowShareModal] = useState(false);
 
@@ -34,14 +36,14 @@ export default function Home() {
   const loadDocuments = async () => {
     setLoadingDocs(true);
     try {
-      const response = await fetch('/api/documents');
+      const response = await fetch("/api/documents");
       if (!response.ok) {
-        throw new Error('Failed to load documents');
+        throw new Error("Failed to load documents");
       }
       const data = await response.json();
       setDocuments(data);
     } catch (error) {
-      console.error('Error loading documents:', error);
+      console.error("Error loading documents:", error);
     } finally {
       setLoadingDocs(false);
     }
@@ -55,41 +57,41 @@ export default function Home() {
     setChatError(null);
 
     try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
+      const response = await fetch("/api/chat", {
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({ query }),
       });
 
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to get response');
+        throw new Error(data.error || "Failed to get response");
       }
 
       setResponse(data.content);
-      
+
       // Save to history if user is logged in
       if (user) {
-        const { error } = await supabase
-          .from('chat_history')
-          .insert([
-            {
-              user_id: user.id,
-              query,
-              response: data.content,
-              is_public: false,
-            },
-          ]);
+        const { error } = await supabase.from("chat_history").insert([
+          {
+            user_id: user.id,
+            query,
+            response: data.content,
+            is_public: false,
+          },
+        ]);
 
         if (error) {
-          console.error('Error saving to history:', error);
+          console.error("Error saving to history:", error);
         }
       }
     } catch (error) {
-      console.error('Chat error:', error);
-      setChatError(error instanceof Error ? error.message : 'An error occurred');
+      console.error("Chat error:", error);
+      setChatError(
+        error instanceof Error ? error.message : "An error occurred"
+      );
     } finally {
       setLoading(false);
     }
@@ -100,38 +102,38 @@ export default function Home() {
 
     try {
       const { data, error } = await supabase
-        .from('chat_history')
-        .select('*')
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: false });
+        .from("chat_history")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false });
 
       if (error) throw error;
       setHistory(data || []);
     } catch (error) {
-      console.error('Error loading chat history:', error);
+      console.error("Error loading chat history:", error);
     }
   };
 
   const togglePrivacy = async (chatId: string, currentIsPublic: boolean) => {
     try {
       const { error } = await supabase
-        .from('chat_history')
+        .from("chat_history")
         .update({ is_public: !currentIsPublic })
-        .eq('id', chatId);
+        .eq("id", chatId);
 
       if (error) throw error;
       loadChatHistory();
     } catch (error) {
-      console.error('Error toggling privacy:', error);
+      console.error("Error toggling privacy:", error);
     }
   };
 
   const handleShare = async (chat: any, includeQuestion: boolean) => {
     try {
-      const response = await fetch('/api/share', {
-        method: 'POST',
+      const response = await fetch("/api/share", {
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           query: includeQuestion ? chat.query : null,
@@ -139,15 +141,15 @@ export default function Home() {
         }),
       });
 
-      if (!response.ok) throw new Error('Failed to create share link');
-      
+      if (!response.ok) throw new Error("Failed to create share link");
+
       const { shareId } = await response.json();
       const url = `${window.location.origin}/share/${shareId}`;
       setShareUrl(url);
       setShowShareModal(true);
     } catch (error) {
-      console.error('Share error:', error);
-      alert('Failed to create share link');
+      console.error("Share error:", error);
+      alert("Failed to create share link");
     }
   };
 
@@ -156,12 +158,13 @@ export default function Home() {
       ? `Q: ${chat.query}\n\nA: ${chat.response}`
       : chat.response;
 
-    const truncatedText = text.length > 255
-      ? text.substring(0, 250) + '...'
-      : text;
-      
-    const url = 'https://twitter.com/intent/tweet?text=' + encodeURIComponent(truncatedText);
-    window.open(url, '_blank');
+    const truncatedText =
+      text.length > 255 ? text.substring(0, 250) + "..." : text;
+
+    const url =
+      "https://twitter.com/intent/tweet?text=" +
+      encodeURIComponent(truncatedText);
+    window.open(url, "_blank");
   };
 
   const handleLinkedInShare = (chat: any, includeQuestion: boolean) => {
@@ -170,9 +173,11 @@ export default function Home() {
       : chat.response;
 
     const sourceUrl = window.location.origin;
-    
-    const url = `https://www.linkedin.com/feed/?linkOrigin=LI_BADGE&shareActive=true&text=${encodeURIComponent(text)}&url=${encodeURIComponent(sourceUrl)}`;
-    window.open(url, '_blank');
+
+    const url = `https://www.linkedin.com/feed/?linkOrigin=LI_BADGE&shareActive=true&text=${encodeURIComponent(
+      text
+    )}&url=${encodeURIComponent(sourceUrl)}`;
+    window.open(url, "_blank");
   };
 
   const handleDocumentClick = async (doc: any) => {
@@ -183,12 +188,12 @@ export default function Home() {
     try {
       const res = await fetch(`/api/documents/${doc.id}/content`);
       if (!res.ok) {
-        throw new Error('Failed to load document content');
+        throw new Error("Failed to load document content");
       }
       const data = await res.json();
       setResponse(data);
     } catch (error) {
-      console.error('Error loading document content:', error);
+      console.error("Error loading document content:", error);
       setResponse(null);
     } finally {
       setLoading(false);
@@ -322,7 +327,11 @@ export default function Home() {
                       className="text-sm px-3 py-1.5 rounded bg-gray-800/50 text-blue-400 hover:text-blue-300 hover:bg-gray-800 flex items-center gap-2 transition-colors duration-200"
                       title="Share on X with question and answer"
                     >
-                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                      <svg
+                        className="w-4 h-4"
+                        viewBox="0 0 24 24"
+                        fill="currentColor"
+                      >
                         <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
                       </svg>
                       <span>X share with question and answer</span>
@@ -332,7 +341,11 @@ export default function Home() {
                       className="text-sm px-3 py-1.5 rounded bg-gray-800/50 text-blue-400 hover:text-blue-300 hover:bg-gray-800 flex items-center gap-2 transition-colors duration-200"
                       title="Share on X without question"
                     >
-                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                      <svg
+                        className="w-4 h-4"
+                        viewBox="0 0 24 24"
+                        fill="currentColor"
+                      >
                         <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
                       </svg>
                       <span>X share with respond content only</span>
@@ -341,25 +354,37 @@ export default function Home() {
                     {/* LinkedIn Share Buttons */}
                     <div className="border-l border-gray-700/50 pl-2 flex items-center gap-2">
                       <button
-                        onClick={() => handleLinkedInShare({ query, response }, true)}
+                        onClick={() =>
+                          handleLinkedInShare({ query, response }, true)
+                        }
                         className="text-sm px-3 py-1.5 rounded bg-gray-800/50 text-blue-400 hover:text-blue-300 hover:bg-gray-800 flex items-center gap-2 transition-colors duration-200"
                         title="Share on LinkedIn with question and answer"
                       >
-                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                        <svg
+                          className="w-4 h-4"
+                          viewBox="0 0 24 24"
+                          fill="currentColor"
+                        >
                           <path d="M20.5 2h-17A1.5 1.5 0 002 3.5v17A1.5 1.5 0 003.5 22h17a1.5 1.5 0 001.5-1.5v-17A1.5 1.5 0 0020.5 2zM8 19H5v-9h3zM6.5 8.25A1.75 1.75 0 118.3 6.5a1.78 1.78 0 01-1.8 1.75zM19 19h-3v-4.74c0-1.42-.6-1.93-1.38-1.93A1.74 1.74 0 0013 14.19a.66.66 0 000 .14V19h-3v-9h2.9v1.3a3.11 3.11 0 012.7-1.4c1.55 0 3.36.86 3.36 3.66z" />
-                      </svg>
-                      <span>LinkedIn share with Q&A</span>
-                    </button>
+                        </svg>
+                        <span>LinkedIn share with Q&A</span>
+                      </button>
                       <button
-                        onClick={() => handleLinkedInShare({ query, response }, false)}
+                        onClick={() =>
+                          handleLinkedInShare({ query, response }, false)
+                        }
                         className="text-sm px-3 py-1.5 rounded bg-gray-800/50 text-blue-400 hover:text-blue-300 hover:bg-gray-800 flex items-center gap-2 transition-colors duration-200"
                         title="Share on LinkedIn without question"
                       >
-                        <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                        <svg
+                          className="w-4 h-4"
+                          viewBox="0 0 24 24"
+                          fill="currentColor"
+                        >
                           <path d="M20.5 2h-17A1.5 1.5 0 002 3.5v17A1.5 1.5 0 003.5 22h17a1.5 1.5 0 001.5-1.5v-17A1.5 1.5 0 0020.5 2zM8 19H5v-9h3zM6.5 8.25A1.75 1.75 0 118.3 6.5a1.78 1.78 0 01-1.8 1.75zM19 19h-3v-4.74c0-1.42-.6-1.93-1.38-1.93A1.74 1.74 0 0013 14.19a.66.66 0 000 .14V19h-3v-9h2.9v1.3a3.11 3.11 0 012.7-1.4c1.55 0 3.36.86 3.36 3.66z" />
-                      </svg>
-                      <span>LinkedIn share content only</span>
-                    </button>
+                        </svg>
+                        <span>LinkedIn share content only</span>
+                      </button>
                     </div>
                   </div>
                 </div>
